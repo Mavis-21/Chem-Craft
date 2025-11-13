@@ -1,5 +1,5 @@
 # ------------------------------- MODULES -----------------------------------------
-from streamlit_option_menu import option_menu
+from streamlit-option-menu import option-menu
 import streamlit as st
 import mysql.connector as my
 import requests
@@ -427,3 +427,4 @@ def Main():
 
 
 Main()
+
