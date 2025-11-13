@@ -1,6 +1,7 @@
 streamlit
-streamlit-option-menu
+streamlit_option_menu
 requests
 mysql-connector-python
 rdkit
+
 
