@@ -1,8 +1,10 @@
 streamlit
-streamlit_option_menu
-requests
-mysql-connector-python
+streamlit-option-menu
 rdkit
+py3Dmol
+requests
 pandas
-time
+mysql-connector-python
+
+
 
