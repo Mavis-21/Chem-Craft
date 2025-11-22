@@ -3,5 +3,6 @@ streamlit_option_menu
 requests
 mysql-connector-python
 rdkit
-
+pandas
+time
 
