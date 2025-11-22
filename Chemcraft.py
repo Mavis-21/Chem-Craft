@@ -1,13 +1,18 @@
 # ------------------------------- MODULES -----------------------------------------
+
 from streamlit_option_menu import option_menu
 import streamlit as st
 import mysql.connector as my
 import requests
+import py3Dmol
+import time as t
 from rdkit import Chem
 from rdkit.Chem import AllChem
+import pandas as pd
 
 
-# ----------------------------- INITIALIZATION ------------------------------------
+# -------------------------------- FUNCTIONS ---------------------------------------
+
 def initialisation():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -16,11 +21,16 @@ def initialisation():
     if "guest_history" not in st.session_state:
         st.session_state.guest_history = []
         st.session_state.count = 0
+        print("---------------------------------------")
 
 
 def update_page(x):
-    pages = ["home", "login", "signup"]
-    st.session_state.page = pages[x]
+    if x == 0:
+        st.session_state.page = "home"
+    elif x == 1:
+        st.session_state.page = "login"
+    elif x == 2:
+        st.session_state.page = "signup"
 
 
 def update_accStatus(x):
@@ -31,20 +41,34 @@ def update_accStatus(x):
 
 
 def update_mainpage(x):
-    mainpages = ["new", "search"]
-    if x == "sidebar":
+    if x == 0:
+        st.session_state.mainpage = "new"
+    elif x == 1:
+        st.session_state.mainpage = "aboutus"
+    elif x == "sidebar":
         st.session_state.mainpage = "history"
-    else:
-        st.session_state.mainpage = mainpages[x]
+    elif x == "sidebar_admin":
+        st.session_state.mainpage = "Admin_tables"
+    elif x == 2:
+        st.session_state.mainpage = "Admin"
 
 
 def toggle_fhistory(x):
-    st.session_state.fhistory = bool(x)
+    if x == 0:
+        st.session_state.fhistory = False
+    elif x == 1:
+        st.session_state.fhistory = True
 
 
-# ----------------------------- DB FUNCTIONS --------------------------------------
+def toggle_afhistory(x):
+    if x == 0:
+        st.session_state.afhistory = False
+    elif x == 1:
+        st.session_state.afhistory = True
+
+
 def connection():
-    con = my.connect(user="root", host="localhost", passwd="Fanta@123", database="ChemCraft2")
+    con = my.connect(user="root", host='localhost', passwd="Mavis@21", database="ChemCraft21")
     cur = con.cursor()
     return con, cur
 
@@ -57,92 +81,137 @@ def users():
     return l
 
 
-def passwd_checker(u, p):
+def passwd_checker(u, p):  # u - username; p - password
     con, cur = connection()
     cur.execute("select passwd from users where username='{}'".format(u))
-    ap = cur.fetchone()[0]
+    ap = cur.fetchone()[0]  # pa - actual password
     con.close()
-    return ap == p
+    if ap == p:
+        return True
+    else:
+        return False
 
 
+def user_table_exists():
+    if st.session_state.user.lower() in get_tables():
+        return True
+    else:
+        return False
+
+
+def is_admin():
+    if 'user' in st.session_state:
+        con, cur = connection()
+        cur.execute("SELECT typ from users where username = '%s'" % (st.session_state.user,))
+        r = cur.fetchone()
+        con.close()
+        if r and r[0] == "Admin":
+            return True
+        return False
+    return None
+
+
+# -------------------------------------- SQL -------------------------------------------
 def create_tables():
     con, cur = connection()
+    if not con:
+        return
     q1 = """
-        CREATE TABLE IF NOT EXISTS users(
-            userid INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) UNIQUE,
-            passwd VARCHAR(255),
-            email VARCHAR(100),
-            typ VARCHAR(20)
-        )
-        """
-    q2 = """
-        CREATE TABLE IF NOT EXISTS history(
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            userid INT,
-            searched MEDIUMTEXT,
-            smiles MEDIUMTEXT,
-            FOREIGN KEY(userid) REFERENCES users(userid)
-        )
-        """
-    q3 = "CREATE TABLE IF NOT EXISTS cache(logged_in int(2))"
+            CREATE TABLE IF NOT EXISTS users(
+                userid INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE,
+                passwd VARCHAR(255),
+                email VARCHAR(100),
+                typ VARCHAR(20)
+            )
+            """
+
     cur.execute(q1)
-    cur.execute(q2)
-    cur.execute(q3)
+    con.commit()
+    con.close()
+
+
+def create_usertable(user):
+    con, cur = connection()
+    q = """create table %s(
+       user varchar(40),
+       searched varchar(100),
+       smiles varchar(100)
+       )""" % (user,)
+    cur.execute(q)
     con.commit()
     con.close()
 
 
 def get_userid(username):
     con, cur = connection()
-    cur.execute("SELECT userid FROM users WHERE username=%s", (username,))
+    if not username:
+        return None
+    cur.execute("SELECT userid FROM users WHERE username='%s'" % (username,))
     result = cur.fetchone()
     con.close()
-    return result[0] if result else None
+    return result[0]
 
 
 def get_history(username, x):
+    if not username:
+        return []
     userid = get_userid(username)
     con, cur = connection()
+    cur.execute("")
     col = ["searched", "smiles"]
-    cur.execute(f"SELECT {col[0 if x == 'searched' else 1]} FROM history WHERE userid=%s", (userid,))
-    result = cur.fetchone()
+    if not user_table_exists():
+        return []
+    if x == col[0]:
+        cur.execute("SELECT searched FROM %s" % (username,))
+    elif x == col[1]:
+        cur.execute("SELECT searched FROM %s" % (username,))
+    # cur.fetchone()
+    result = cur.fetchall()
     con.close()
+    # Convert string back to list
     if result:
-        return eval(result[0])
+        l = [i[0] for i in result]
+        return l
     return []
 
 
+def get_tables():
+    q = "show tables"
+    con, cur = connection()
+    cur.execute(q)
+    r = cur.fetchall()
+    con.close()
+    l = [i[0] for i in r]
+    return l
+
+
 def update_history(iupac_input):
-    if st.session_state.get("user") and iupac_to_smiles(iupac_input) not in get_history(st.session_state.user,
-                                                                                        "smiles"):
+    smiles = iupac_to_smiles(iupac_input)
+    if st.session_state.get("user") and smiles and smiles not in get_history(st.session_state.user, "smiles"):
         con, cur = connection()
-        userid = get_userid(st.session_state.user)
         searched_str = get_history(st.session_state.user, "searched")
         smiles_str = get_history(st.session_state.user, "smiles")
-        smiles = iupac_to_smiles(iupac_input)
-        if smiles is not None:
-            smiles_str.append(smiles)
-            searched_str.append(iupac_input)
-        cur.execute("SELECT id FROM history WHERE userid=%s", (userid,))
-        res = cur.fetchone()
-        if res:
-            cur.execute('UPDATE history SET searched=%s WHERE userid=%s', (str(searched_str), userid))
-            cur.execute('UPDATE history SET smiles=%s WHERE userid=%s', (str(smiles_str), userid))
-        else:
-            cur.execute("INSERT INTO history (userid, searched, smiles) VALUES (%s, %s, %s)",
-                        (userid, str(searched_str), str(smiles_str)))
+        smiles_str.append(iupac_to_smiles(iupac_input))
+        searched_str.append(iupac_input)
+        if not user_table_exists():
+            create_usertable(st.session_state.user)
+        cur.execute(
+            "INSERT into %s values('%s','%s','%s')" % (st.session_state.user, st.session_state.user, iupac_input,
+                                                       smiles))
         con.commit()
         con.close()
 
 
-# ----------------------------- UI PAGES ------------------------------------------
+# _____________________________________ Starting ________________________________________
 def login():
     st.title("Welcome back to Chemcraft")
     st.header("Login")
+    username = None
+
     with st.form(key='login'):
-        user = st.text_input("*Username:*", placeholder="Username")
-        passwd = st.text_input("*Password:*", placeholder="Password", type='password')
+        user = st.text_input("Username:", placeholder="Username")
+        passwd = st.text_input("Password:", placeholder="Password", type='password')
         if st.form_submit_button("Login"):
             if not user or not passwd:
                 st.warning("Please enter both username and password")
@@ -157,18 +226,23 @@ def login():
                 st.session_state.user = user
                 st.session_state.page = "dashboard"
                 start()
+                # username = user
     st.button("Home", key='loginbutton', on_click=update_page, args=(0,))
 
 
 def sign_up():
     st.title("Welcome to Chemcraft")
     st.header("Sign Up")
+    username = None
+
     with st.form(key='sign up'):
-        user = st.text_input("*Username:*", placeholder="Username")
-        passwd = st.text_input("*Password:*", placeholder="Password", type='password')
-        email = st.text_input("*Email:*", placeholder="Email")
+        user = st.text_input("Username:", placeholder="Username")
+        passwd = st.text_input("Password:", placeholder="Password", type='password')
+        email = st.text_input("Email:", placeholder="Email")
         gender = st.radio("Gender", ["Male", "Female", "Other"])
-        typ = st.selectbox("Who are you?", ("High school Student", "College Student", "Professor", "Enthusiast"))
+        typ = st.selectbox("Who are you?",
+                           ("High school Student", "College Student", "Professor", "Enthusiast", "Admin"))
+
         if st.form_submit_button("Sign Up"):
             if not user or not passwd or not email:
                 st.warning("Please fill in all fields")
@@ -176,8 +250,13 @@ def sign_up():
                 st.error("Username already exists")
             else:
                 con, cur = connection()
-                cur.execute("INSERT INTO users (username, passwd, email, typ) VALUES (%s, %s, %s, %s)",
-                            (user, passwd, email, typ))
+                if not con:
+                    st.error("Cannot connect to database")
+                    return None
+                cur.execute(
+                    "INSERT INTO users (username, passwd, email, typ) VALUES (%s, %s, %s, %s)",
+                    (user, passwd, email, typ)
+                )
                 con.commit()
                 st.success("Account created")
                 st.balloons()
@@ -185,32 +264,194 @@ def sign_up():
                 st.session_state.user = user
                 st.session_state.page = "dashboard"
                 start()
+                # username = user
                 con.close()
     st.button("Home", key='signup', on_click=update_page, args=(0,))
 
 
 def home():
-    st.title("Chemcraft babyyyy!!!!")
-    col = st.columns(3)
-    with col[0]:
-        st.button("Sign Up", use_container_width=True, on_click=update_page, args=(2,))
-    with col[1]:
-        st.button("Log in", use_container_width=True, on_click=update_page, args=(1,))
-    with col[2]:
-        st.button("Guest Mode", use_container_width=True, on_click=update_accStatus, args=(1,))
+    # Load a stylish Google Font for the heading (Orbitron, sci/tech look)
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@800&display=swap');
+    .stApp {
+        background: radial-gradient(circle at 18% 23%, #121e30 0, #182033 60%, #141d28 100%) !important;
+        min-height: 100vh;
+        font-family: "Segoe UI", system-ui, Arial, sans-serif;
+        overflow-x: hidden;
+        position: relative;
+    }
+    /* floating molecules effect */
+    .mol-float {
+        position: fixed;
+        z-index: 0;
+        opacity: 0.16;
+        font-size: 3.5rem;
+        filter: blur(0.1px);
+        user-select: none;
+        pointer-events: none;
+        animation: float 13s ease-in-out infinite;
+    }
+    .mol1 { top: 14vh; left: 7vw; animation-delay: 1s;}
+    .mol2 { top: 35vh; left: 73vw; font-size: 3rem; animation-delay: 4s;}
+    .mol3 { top: 54vh; left: 33vw; font-size: 2.7rem; animation-delay: 7s;}
+    .mol4 { top: 74vh; left: 81vw; font-size: 4.1rem; animation-delay: 0s;}
+    .mol5 { top: 19vh; left: 91vw; font-size: 2.7rem; animation-delay: 6s;}
+    @keyframes float {
+        0%   { transform: translateY(0);}
+        50%  { transform: translateY(-38px);}
+        100% { transform: translateY(0);}
+    }
+
+    /* Heading font and color */
+    .chem-header {
+        margin: 36px 0 68px 0;
+        font-family: 'Orbitron', Segoe UI, Arial, sans-serif !important;
+        font-size: 3.6rem;
+        font-weight: 900;
+        text-align: center;
+        background: linear-gradient(110deg,#27e3fd 25%, #a855f7 60%, #ffb300 85%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: 0.09em;
+        text-shadow: 0 2.5px 24px #93e6ff40;
+    }
+
+    /* Each "entry card" as a section with colored left border, whitespace back */
+    .entry-block {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 0.9rem;
+        margin: 43px 0;
+        padding: 0 1rem;
+        width: 100%;
+        max-width: 690px;
+        background: none !important; /* No box! */
+        border-left: 6px solid #21e7abaf;
+        border-radius: 1.3em 0 0 2.2em;
+        box-shadow: none;
+        z-index: 1;
+        position: relative;
+    }
+    .entry-block-alt {
+        border-left: 6px solid #4e9cffbf;
+        margin-left: 85px;
+    }
+    .entry-bio {
+        font-size: 1.18rem;
+        color: #53fcf1;
+        font-weight: bold;
+        letter-spacing: 0.01em;
+        margin-bottom: 4px;
+    }
+    .entry-intro {
+        color: #f0f6ff;
+        font-size: 1.03rem;
+        margin-bottom: 7px;
+        font-weight: 510;
+    }
+    .entry-btn {
+        font-size: 1.12rem;
+        font-weight: 700;
+        border-radius: 999px;
+        border: none;
+        padding: 0.48rem 1.45rem;
+        outline: none;
+        background: linear-gradient(110deg, #38bdf8 55%, #a855f7 90%);
+        color: #ecfdf5;
+        cursor: pointer;
+        transition: filter 0.13s, background 0.18s;
+        margin-top: 0.3rem;
+        box-shadow: 0 0px 19px #a855f720;
+    }
+    .entry-btn:hover {
+        filter: brightness(1.15);
+        background: linear-gradient(110deg, #21e7ab 40%, #b799ff 90%);
+    }
+    @media (max-width: 600px) {
+        .chem-header {font-size:2.2rem;}
+        .entry-block, .entry-block-alt {margin:2rem 0;}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Floating molecules
+    st.markdown("""
+    <span class="mol-float mol2">🧪</span>
+    <span class="mol-float mol3">🔬</span>
+    <span class="mol-float mol4">🥼</span>
+    <span class="mol-float mol5">🥽</span>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="chem-header">ChemCraft</div>', unsafe_allow_html=True)
+
+    # SIGN UP
+    st.markdown('<div class="entry-block">', unsafe_allow_html=True)
+    st.markdown('<div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-bio">🌟 New user?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-intro">Create a free ChemCraft account to save your search history and unlock all features.</div>', unsafe_allow_html=True)
+    if st.button("Sign Up", key="signup_btn", help="Create your account", type="primary"):
+        update_page(2)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # LOG IN
+    st.markdown('<div class="entry-block entry-block-alt">', unsafe_allow_html=True)
+    st.markdown('<div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-bio">🔐 Already a member?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-intro">Log in to your ChemCraft profile and continue exploring molecules and saved searches.</div>', unsafe_allow_html=True)
+    if st.button("Log In", key="login_btn", help="Access your account", type="secondary"):
+        update_page(1)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # GUEST MODE
+    st.markdown('<div class="entry-block">', unsafe_allow_html=True)
+    st.markdown('<div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-bio">👀 Just browsing?</div>', unsafe_allow_html=True)
+    st.markdown('<div class="entry-intro">Try out molecule features instantly without creating an account. Guest history is temporary.</div>', unsafe_allow_html=True)
+    if st.button("Guest Mode", key="guest_btn", help="Try ChemCraft instantly"):
+        update_accStatus(1)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 
 
 def guest_dashboard():
     st.title(" Guest Mode")
     st.info("You are exploring as a Guest. Sign up or log in to save your history and progress.")
+
     iupac_input = st.text_input("Enter IUPAC Name (Guest):")
     if iupac_input:
         rendering(iupac_input)
         st.session_state.guest_history.append(iupac_input)
+
     st.button("Return Home", on_click=update_page, args=(0,))
 
 
-# --------------------- IUPAC, SMILES, 3Dmol.js Rendering --------------------------
+def display_table(q, x):
+    con, cur = connection()
+    if x == 0:
+        cur.execute("SELECT * FROM %s" % (q,))
+    elif x == 1:
+        cur.execute(q)
+    if cur.with_rows:
+        rows = cur.fetchall()
+        cols = [i[0] for i in cur.description]
+        df = pd.DataFrame(rows, columns=cols)
+        st.table(df)
+
+
+def admin_page():
+    st.title("Admin Mode")
+    q = st.text_input("Enter query:")
+    display_table(q, 1)
+
+
+# _________________________________________ 3D Rendering __________________________________
+
 def iupac_to_smiles(iupac_name):
     url = f"https://opsin.ch.cam.ac.uk/opsin/{iupac_name}.json"
     r = requests.get(url)
@@ -366,28 +607,57 @@ def fullrendering():
     rendering(iupac_input)
 
 
-def sidebar(username):
-    with st.sidebar:
-        st.button("New chat", on_click=update_mainpage, args=(0,))
-        st.button("Search chats", on_click=update_mainpage, args=(1,))
-        searched_items = get_history(username,
-                                     "searched") if st.session_state.logged_in else st.session_state.guest_history
-        if searched_items:
-            if "fhistory" not in st.session_state:
-                st.session_state.fhistory = False
-            display_items = searched_items[-5:] if not st.session_state.fhistory else searched_items[::-1]
-            option_menu(menu_title="History", options=display_items, key="sidebar", on_change=update_mainpage)
-            if len(searched_items) > 5:
-                if not st.session_state.fhistory:
-                    st.button("More", key="more_btn", on_click=toggle_fhistory, args=(1,))
-                else:
-                    st.button("Less", key="less_btn", on_click=toggle_fhistory, args=(0,))
+# ________________________________________ Side UI ________________________________________
+
+def sidebar(username, typ):
+    if typ == "Civillian":
+        with st.sidebar:
+            st.button("New chat", on_click=update_mainpage, args=(0,))
+            st.button("About Us", on_click=update_mainpage, args=(1,))
+            searched_items = get_history(username,
+                                         "searched") if st.session_state.logged_in else st.session_state.guest_history
+            if searched_items:
+                if "fhistory" not in st.session_state:
+                    st.session_state.fhistory = False
+                display_items = searched_items[-5:] if not st.session_state.fhistory else searched_items[::-1]
+                option_menu(menu_title="History", options=display_items, key="sidebar", on_change=update_mainpage)
+                if len(searched_items) > 5:
+                    if not st.session_state.fhistory:
+                        st.button("More", key="more_btn", on_click=toggle_fhistory, args=(1,))
+                    else:
+                        st.button("Less", key="less_btn", on_click=toggle_fhistory, args=(0,))
+    elif typ == "Admin":
+        with st.sidebar:
+            st.button("Home", on_click=update_mainpage, args=(2,))
+            if st.session_state.logged_in and is_admin():
+                tables = get_tables()
+            else:
+                tables = None
+
+            if tables:
+                if "afhistory" not in st.session_state:
+                    st.session_state.afhistory = False
+                if "fhistory" not in st.session_state:
+                    st.session_state.fhistory = False
+                display_items = tables[-5:] if not st.session_state.afhistory else tables[::-1]
+                option_menu(menu_title="Tables", options=display_items, key="sidebar_admin", on_change=update_mainpage)
+                if len(tables) > 5:
+                    if 'fhistory' in st.session_state and not st.session_state.fhistory:
+                        st.button("More", key="more_btn", on_click=toggle_afhistory, args=(1,))
+                    else:
+                        st.button("Less", key="less_btn", on_click=toggle_afhistory, args=(0,))
+#------------------------------------------ ACTIONS ---------------------------------------
+
 
 
 def start():
-    if not (st.session_state.logged_in or st.session_state.guest):
+    print("Start",st.session_state.count)
+    if not(st.session_state.logged_in or st.session_state.guest):
         if "page" not in st.session_state:
-            st.session_state.page = "home"
+            if st.session_state.logged_in or st.session_state.guest:
+                st.session_state.page = "dashboard"  # go straight to dashboard
+            else:
+                st.session_state.page = "home"  # login/signup
         if st.session_state.page == "home":
             home()
         elif st.session_state.page == "signup":
@@ -397,35 +667,76 @@ def start():
         if "user_history" not in st.session_state:
             st.session_state.user_history = []
     else:
+        print("Else",st.session_state.count)
         st.rerun()
 
 
-def page_main():
+def page_main(): #s - selected
     username = st.session_state.user if not st.session_state.guest else None
-    sidebar(username)
+    if is_admin():
+        sidebar(username,"Admin")
+    else:
+        sidebar(username,"Civillian")
     if 'mainpage' not in st.session_state:
-        st.session_state.mainpage = "new"
-    if st.session_state.mainpage == "new":
+        if is_admin():
+            st.session_state.mainpage = "Admin"
+        else:
+            st.session_state.mainpage = "new"
+    if st.session_state.mainpage == "Admin":
+        admin_page()
+    elif st.session_state.mainpage == "new":
         fullrendering()
-    elif st.session_state.mainpage == "search":
-        st.title("Work in Progress")
+    elif st.session_state.mainpage == "aboutus":
+        st.title("👩‍🔬 About Us")
+
+        st.write("""
+        Welcome to our CHEMCRAFT!  
+        I am a Grade 12 student — Sanjai Sivam (S³) — who has a passion for 
+        combining science and technology.
+
+        This website was developed as part of our Computer Science project.  
+        It allows users to visualize molecules in interactive 3D, explore their **chemical properties, and learn more about the 
+        fascinating world of molecular structures.
+
+        Our goal is to make chemistry more engaging and easier to understand through the power of code and visualization.
+        """)
+
+        st.subheader("🌟 Our Vision")
+        st.write("""
+        To bridge the gap between theory and visualization — helping learners truly see what molecules look like,  
+        and how their structures define their behavior.
+        """)
+
+        st.subheader("💻 Technologies Used")
+        st.write("""
+        - Python for backend logic  
+        - Streamlit for user interface  
+        - MySQL for data management  
+        - 3D molecular rendering tools for visualization
+        """)
+
+        st.caption("© 2025 — Project by cubitor-S³ legacy")
+
     elif st.session_state.mainpage == "history":
-        rendering(st.session_state.get("sidebar", ""))
+        rendering(st.session_state["sidebar"])
+    elif st.session_state.mainpage == "Admin_tables":
+        display_table(st.session_state["sidebar_admin"],0)
 
+#------------------------------------------ EXECUTION -----------------------------------
 
-# ----------------------------------------- RUN -------------------------------------
+create_tables()
 initialisation()
 
-
-# create_tables() #uncomment if running for the first time
 def Main():
     if st.session_state.logged_in or st.session_state.guest:
         page_main()
     else:
         start()
     st.session_state.count += 1
+    print("Main",st.session_state.count)
 
 
 Main()
-
-
+print("log", st.session_state.logged_in)
+print("guest",st.session_state.guest)
+print()
